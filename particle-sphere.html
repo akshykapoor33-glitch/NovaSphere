@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Particle Sphere</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; color: #e8e4dc; font-family: Georgia, 'Times New Roman', serif; overflow: hidden; width: 100vw; height: 100vh; }
+
+  #canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+  #webcam { position: fixed; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; display: none; opacity: 0.18; }
+  #landmark-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; display: none; }
+
+  #ui { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+
+  #title { position: absolute; top: 32px; left: 36px; pointer-events: none; }
+  #title h1 { font-size: 22px; font-weight: 400; letter-spacing: 0.04em; color: #e8e4dc; }
+  #title p { font-size: 12px; color: rgba(232,228,220,0.38); margin-top: 4px; letter-spacing: 0.08em; font-family: 'Courier New', monospace; }
+
+  #controls { position: absolute; bottom: 32px; left: 36px; display: flex; flex-direction: column; gap: 10px; pointer-events: all; }
+  .btn {
+    background: rgba(232,228,220,0.07);
+    border: 0.5px solid rgba(232,228,220,0.2);
+    color: rgba(232,228,220,0.8);
+    padding: 9px 18px;
+    font-size: 12px;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background 0.2s, border-color 0.2s;
+    text-align: left;
+  }
+  .btn:hover { background: rgba(232,228,220,0.14); border-color: rgba(232,228,220,0.4); }
+  .btn.active { background: rgba(232,228,220,0.12); border-color: rgba(232,228,220,0.5); color: #e8e4dc; }
+
+  #status { position: absolute; top: 32px; right: 36px; text-align: right; font-family: 'Courier New', monospace; font-size: 11px; color: rgba(232,228,220,0.35); line-height: 1.8; }
+  #status .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #3a3a4a; margin-right: 5px; vertical-align: middle; }
+  #status .dot.on { background: #7a9a6a; }
+
+  #charge-ring { position: absolute; pointer-events: none; display: none; }
+  #charge-ring svg { display: block; }
+
+  #hint { position: absolute; bottom: 32px; right: 36px; font-family: 'Courier New', monospace; font-size: 11px; color: rgba(232,228,220,0.22); text-align: right; line-height: 1.9; }
+
+  #finger-count { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 72px; font-weight: 300; color: rgba(232,228,220,0.06); letter-spacing: -0.02em; pointer-events: none; transition: opacity 0.5s; }
+
+  #loading { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0a0a0f; z-index: 100; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; }
+  #loading h2 { font-size: 18px; font-weight: 400; color: rgba(232,228,220,0.7); }
+  #loading p { font-size: 12px; color: rgba(232,228,220,0.3); font-family: 'Courier New', monospace; }
+  .spinner { width: 28px; height: 28px; border: 1px solid rgba(232,228,220,0.1); border-top-color: rgba(232,228,220,0.5); border-radius: 50%; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <h2>Particle Sphere</h2>
+  <p id="load-msg">loading mediapipe...</p>
+</div>
+
+<video id="webcam" autoplay muted playsinline></video>
+<canvas id="canvas"></canvas>
+<canvas id="landmark-canvas"></canvas>
+
+<div id="ui">
+  <div id="title">
+    <h1>Particle Sphere</h1>
+    <p>hand-reactive · 3000 particles</p>
+  </div>
+
+  <div id="status">
+    <div><span class="dot" id="dot-cam"></span>webcam</div>
+    <div><span class="dot" id="dot-hand"></span>hand tracking</div>
+    <div id="hand-info">—</div>
+  </div>
+
+  <div id="controls">
+    <button class="btn" id="btn-webcam">toggle webcam bg</button>
+    <button class="btn" id="btn-landmarks">show landmarks</button>
+  </div>
+
+  <div id="hint">
+    <div>single hand → move &amp; rotate</div>
+    <div>pinch &amp; hold → charge · release → explode</div>
+    <div>two hands → spread/pinch to resize</div>
+    <div>finger count → color shift</div>
+  </div>
+
+  <div id="finger-count">0</div>
+
+  <div id="charge-ring">
+    <svg id="charge-svg" width="120" height="120" viewBox="0 0 120 120">
+      <circle cx="60" cy="60" r="50" fill="none" stroke="rgba(232,228,220,0.08)" stroke-width="2"/>
+      <circle id="charge-arc" cx="60" cy="60" r="50" fill="none" stroke="rgba(232,228,220,0.7)" stroke-width="2"
+        stroke-dasharray="314" stroke-dashoffset="314" stroke-linecap="round"
+        transform="rotate(-90 60 60)"/>
+    </svg>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js"></script>
+<script>
+const loadMsg = document.getElementById('load-msg');
+const loading = document.getElementById('loading');
+const canvas = document.getElementById('canvas');
+const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+const lmCanvas = document.getElementById('landmark-canvas');
+const lmCtx = lmCanvas.getContext('2d');
+const webcamEl = document.getElementById('webcam');
+
+let W = window.innerWidth, H = window.innerHeight;
+canvas.width = W; canvas.height = H;
+lmCanvas.width = W; lmCanvas.height = H;
+
+window.addEventListener('resize', () => {
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W; canvas.height = H;
+  lmCanvas.width = W; lmCanvas.height = H;
+  gl.viewport(0, 0, W, H);
+});
+
+const N = 3000;
+const TAU = Math.PI * 2;
+
+let sphereRadius = 1.0;
+let targetRadius = 1.0;
+let sphereOffset = [0, 0];
+let targetOffset = [0, 0];
+let rotX = 0, rotY = 0;
+let targetRotX = 0, targetRotY = 0;
+
+let colorHue = 0.6;
+let targetHue = 0.6;
+
+let pinching = false;
+let pinchCharge = 0;
+let exploding = false;
+let explodeTime = 0;
+
+let handsData = [];
+let showLandmarks = false;
+let webcamBg = false;
+
+const basePositions = new Float32Array(N * 3);
+const explodeVelocities = new Float32Array(N * 3);
+const phases = new Float32Array(N);
+
+function randomSpherePoint(r) {
+  const u = Math.random(), v = Math.random();
+  const theta = TAU * u;
+  const phi = Math.acos(2 * v - 1);
+  return [
+    r * Math.sin(phi) * Math.cos(theta),
+    r * Math.sin(phi) * Math.sin(theta),
+    r * Math.cos(phi)
+  ];
+}
+
+function initParticles() {
+  for (let i = 0; i < N; i++) {
+    const p = randomSpherePoint(1.0);
+    basePositions[i*3]   = p[0];
+    basePositions[i*3+1] = p[1];
+    basePositions[i*3+2] = p[2];
+    phases[i] = Math.random() * TAU;
+    explodeVelocities[i*3]   = (Math.random()-0.5)*4;
+    explodeVelocities[i*3+1] = (Math.random()-0.5)*4;
+    explodeVelocities[i*3+2] = (Math.random()-0.5)*4;
+  }
+}
+initParticles();
+
+const vsSource = `
+attribute vec3 aBase;
+attribute vec3 aVel;
+attribute float aPhase;
+uniform float uTime;
+uniform float uRadius;
+uniform float uExplode;
+uniform float uExplodeT;
+uniform vec2 uOffset;
+uniform float uRotX;
+uniform float uRotY;
+uniform vec3 uColor;
+uniform float uAspect;
+varying float vAlpha;
+varying vec3 vColor;
+
+vec3 rotateX(vec3 p, float a) {
+  float c=cos(a), s=sin(a);
+  return vec3(p.x, c*p.y - s*p.z, s*p.y + c*p.z);
+}
+vec3 rotateY(vec3 p, float a) {
+  float c=cos(a), s=sin(a);
+  return vec3(c*p.x + s*p.z, p.y, -s*p.x + c*p.z);
+}
+
+void main() {
+  float wave = sin(uTime*1.2 + aPhase)*0.012 + cos(uTime*0.8 + aPhase*1.3)*0.008;
+  vec3 pos = aBase * (uRadius + wave);
+
+  vec3 explPos = aBase + aVel * uExplodeT * uExplodeT;
+  pos = mix(pos, explPos, uExplode);
+
+  pos = rotateX(pos, uRotX);
+  pos = rotateY(pos, uRotY);
+
+  pos.x += uOffset.x * 2.0;
+  pos.y += uOffset.y * 2.0;
+
+  float dist = length(pos.xy);
+  float depth = (pos.z + 3.0) / 6.0;
+  vAlpha = mix(0.25, 1.0, depth) * (1.0 - uExplode * 0.5);
+
+  vColor = uColor;
+
+  gl_Position = vec4(pos.x / uAspect, pos.y, pos.z * 0.1, 1.0 + pos.z * 0.2);
+  gl_PointSize = mix(1.5, 3.0, depth) * (1.0 + uExplode * 2.0);
+}
+`;
+
+const fsSource = `
+precision mediump float;
+varying float vAlpha;
+varying vec3 vColor;
+void main() {
+  vec2 uv = gl_PointCoord - 0.5;
+  float d = length(uv);
+  if (d > 0.5) discard;
+  float a = smoothstep(0.5, 0.2, d) * vAlpha;
+  gl_FragColor = vec4(vColor, a);
+}
+`;
+
+function compileShader(src, type) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compileShader(vsSource, gl.VERTEX_SHADER));
+gl.attachShader(prog, compileShader(fsSource, gl.FRAGMENT_SHADER));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const aBase = gl.getAttribLocation(prog, 'aBase');
+const aVel  = gl.getAttribLocation(prog, 'aVel');
+const aPhase= gl.getAttribLocation(prog, 'aPhase');
+
+const uTime    = gl.getUniformLocation(prog, 'uTime');
+const uRadius  = gl.getUniformLocation(prog, 'uRadius');
+const uExplode = gl.getUniformLocation(prog, 'uExplode');
+const uExplodeT= gl.getUniformLocation(prog, 'uExplodeT');
+const uOffset  = gl.getUniformLocation(prog, 'uOffset');
+const uRotX    = gl.getUniformLocation(prog, 'uRotX');
+const uRotY    = gl.getUniformLocation(prog, 'uRotY');
+const uColor   = gl.getUniformLocation(prog, 'uColor');
+const uAspect  = gl.getUniformLocation(prog, 'uAspect');
+
+const baseBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, baseBuf);
+gl.bufferData(gl.ARRAY_BUFFER, basePositions, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(aBase);
+gl.vertexAttribPointer(aBase, 3, gl.FLOAT, false, 0, 0);
+
+const velBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, velBuf);
+gl.bufferData(gl.ARRAY_BUFFER, explodeVelocities, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(aVel);
+gl.vertexAttribPointer(aVel, 3, gl.FLOAT, false, 0, 0);
+
+const phaseBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, phaseBuf);
+gl.bufferData(gl.ARRAY_BUFFER, phases, gl.STATIC_DRAW);
+gl.enableVertexAttribArray(aPhase);
+gl.vertexAttribPointer(aPhase, 1, gl.FLOAT, false, 0, 0);
+
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+gl.clearColor(0.039, 0.039, 0.059, 1.0);
+gl.viewport(0, 0, W, H);
+
+function hslToRgb(h, s, l) {
+  const a = s * Math.min(l, 1-l);
+  const f = n => { const k = (n + h*12) % 12; return l - a * Math.max(Math.min(k-3, 9-k, 1), -1); };
+  return [f(0), f(8), f(4)];
+}
+
+function countFingers(hand) {
+  const lm = hand;
+  let count = 0;
+  const tips = [4, 8, 12, 16, 20];
+  const mids = [3, 6, 10, 14, 18];
+  for (let i = 1; i < 5; i++) {
+    if (lm[tips[i]].y < lm[mids[i]].y) count++;
+  }
+  const thumbTip = lm[4], thumbBase = lm[2];
+  if (Math.abs(thumbTip.x - thumbBase.x) > 0.06) count++;
+  return count;
+}
+
+function getPinchDist(hand) {
+  const t = hand[4], i = hand[8];
+  return Math.hypot(t.x - i.x, t.y - i.y);
+}
+
+function getPalmCenter(hand) {
+  const wrist = hand[0], mid = hand[9];
+  return { x: (wrist.x + mid.x)/2, y: (wrist.y + mid.y)/2 };
+}
+
+function getTwoHandDist(h1, h2) {
+  const c1 = getPalmCenter(h1), c2 = getPalmCenter(h2);
+  return Math.hypot(c1.x - c2.x, c1.y - c2.y);
+}
+
+let lastTwoHandDist = null;
+let chargeRingVisible = false;
+let pinchStartTime = 0;
+
+const chargeRing = document.getElementById('charge-ring');
+const chargeArc  = document.getElementById('charge-arc');
+const fingerCount= document.getElementById('finger-count');
+const dotCam     = document.getElementById('dot-cam');
+const dotHand    = document.getElementById('dot-hand');
+const handInfo   = document.getElementById('hand-info');
+
+function updateChargeRing(px, py, charge) {
+  if (charge > 0) {
+    chargeRing.style.display = 'block';
+    chargeRing.style.left = (px - 60) + 'px';
+    chargeRing.style.top  = (py - 60) + 'px';
+    const offset = 314 * (1 - charge);
+    chargeArc.setAttribute('stroke-dashoffset', offset);
+    const t = charge;
+    chargeArc.setAttribute('stroke', `rgba(${Math.round(232*t + 120*(1-t))},${Math.round(228*(1-t)+180*t)},${Math.round(220*(1-t)+100*t)},${0.5 + t*0.5})`);
+  } else {
+    chargeRing.style.display = 'none';
+  }
+}
+
+function processHands() {
+  if (handsData.length === 0) {
+    targetOffset = [0, 0];
+    lastTwoHandDist = null;
+    if (pinching && pinchCharge > 0.3) {
+      exploding = true;
+      explodeTime = 0;
+    }
+    pinching = false;
+    pinchCharge = 0;
+    chargeRing.style.display = 'none';
+    fingerCount.textContent = '';
+    handInfo.textContent = '—';
+    dotHand.classList.remove('on');
+    return;
+  }
+
+  dotHand.classList.add('on');
+
+  if (handsData.length === 1) {
+    const hand = handsData[0];
+    const palm = getPalmCenter(hand);
+    targetOffset = [palm.x - 0.5, -(palm.y - 0.5)];
+    targetRotY += (palm.x - 0.5) * 0.04;
+    targetRotX += (palm.y - 0.5) * 0.04;
+
+    const pinchD = getPinchDist(hand);
+    const isPinching = pinchD < 0.06;
+
+    if (isPinching) {
+      if (!pinching) { pinching = true; pinchStartTime = Date.now(); }
+      pinchCharge = Math.min(1, (Date.now() - pinchStartTime) / 1800);
+      const px = (1 - hand[8].x) * W;
+      const py = hand[8].y * H;
+      updateChargeRing(px, py, pinchCharge);
+    } else {
+      if (pinching && pinchCharge > 0.3) {
+        exploding = true;
+        explodeTime = 0;
+      }
+      pinching = false;
+      pinchCharge = 0;
+      chargeRing.style.display = 'none';
+    }
+
+    const fc = countFingers(hand);
+    fingerCount.textContent = fc;
+    targetHue = fc / 10;
+    handInfo.textContent = `1 hand · ${fc} finger${fc !== 1 ? 's' : ''}`;
+    lastTwoHandDist = null;
+
+  } else if (handsData.length >= 2) {
+    chargeRing.style.display = 'none';
+    pinching = false;
+    pinchCharge = 0;
+
+    const d = getTwoHandDist(handsData[0], handsData[1]);
+    if (lastTwoHandDist !== null) {
+      const delta = d - lastTwoHandDist;
+      targetRadius = Math.max(0.3, Math.min(2.5, targetRadius + delta * 3));
+    }
+    lastTwoHandDist = d;
+
+    const c1 = getPalmCenter(handsData[0]);
+    const c2 = getPalmCenter(handsData[1]);
+    const mx = (c1.x + c2.x)/2, my = (c1.y + c2.y)/2;
+    targetOffset = [mx - 0.5, -(my - 0.5)];
+
+    const fc1 = countFingers(handsData[0]);
+    const fc2 = countFingers(handsData[1]);
+    const totalF = fc1 + fc2;
+    fingerCount.textContent = totalF;
+    targetHue = totalF / 20;
+    handInfo.textContent = `2 hands · ${totalF} fingers`;
+  }
+}
+
+function drawLandmarks() {
+  lmCtx.clearRect(0, 0, W, H);
+  if (!showLandmarks || handsData.length === 0) return;
+  const connections = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  for (const hand of handsData) {
+    lmCtx.strokeStyle = 'rgba(232,228,220,0.25)';
+    lmCtx.lineWidth = 1;
+    for (const [a,b] of connections) {
+      lmCtx.beginPath();
+      lmCtx.moveTo((1-hand[a].x)*W, hand[a].y*H);
+      lmCtx.lineTo((1-hand[b].x)*W, hand[b].y*H);
+      lmCtx.stroke();
+    }
+    for (let i = 0; i < 21; i++) {
+      const x = (1-hand[i].x)*W, y = hand[i].y*H;
+      lmCtx.beginPath();
+      lmCtx.arc(x, y, i === 0 ? 4 : 2.5, 0, TAU);
+      lmCtx.fillStyle = [4,8,12,16,20].includes(i) ? 'rgba(232,180,120,0.9)' : 'rgba(232,228,220,0.6)';
+      lmCtx.fill();
+    }
+  }
+}
+
+let startT = null;
+function render(ts) {
+  if (!startT) startT = ts;
+  const t = (ts - startT) / 1000;
+
+  processHands();
+  drawLandmarks();
+
+  sphereOffset[0] += (targetOffset[0] - sphereOffset[0]) * 0.08;
+  sphereOffset[1] += (targetOffset[1] - sphereOffset[1]) * 0.08;
+  sphereRadius += (targetRadius - sphereRadius) * 0.06;
+  rotX += (targetRotX - rotX) * 0.05;
+  rotY += (targetRotY - rotY) * 0.05;
+  colorHue += (targetHue - colorHue) * 0.04;
+
+  let explodeFactor = 0;
+  let explodeT = 0;
+  if (exploding) {
+    explodeTime += 0.016;
+    const dur = 2.2;
+    if (explodeTime < dur) {
+      const p = explodeTime / dur;
+      explodeFactor = Math.sin(p * Math.PI);
+      explodeT = p * 1.4;
+    } else {
+      exploding = false;
+      explodeTime = 0;
+      initParticles();
+      const baseBuf2 = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, baseBuf2);
+      gl.bufferData(gl.ARRAY_BUFFER, basePositions, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(aBase);
+      gl.vertexAttribPointer(aBase, 3, gl.FLOAT, false, 0, 0);
+      const velBuf2 = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, velBuf2);
+      gl.bufferData(gl.ARRAY_BUFFER, explodeVelocities, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(aVel);
+      gl.vertexAttribPointer(aVel, 3, gl.FLOAT, false, 0, 0);
+    }
+  }
+
+  if (!exploding) {
+    targetRotY += 0.003;
+  }
+
+  const rgb = hslToRgb(colorHue, 0.7, 0.75);
+  gl.viewport(0, 0, W, H);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(prog);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, baseBuf);
+  gl.vertexAttribPointer(aBase, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, velBuf);
+  gl.vertexAttribPointer(aVel, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, phaseBuf);
+  gl.vertexAttribPointer(aPhase, 1, gl.FLOAT, false, 0, 0);
+
+  gl.uniform1f(uTime, t);
+  gl.uniform1f(uRadius, sphereRadius);
+  gl.uniform1f(uExplode, explodeFactor);
+  gl.uniform1f(uExplodeT, explodeT);
+  gl.uniform2f(uOffset, sphereOffset[0], sphereOffset[1]);
+  gl.uniform1f(uRotX, rotX);
+  gl.uniform1f(uRotY, rotY);
+  gl.uniform3fv(uColor, rgb);
+  gl.uniform1f(uAspect, W / H);
+
+  gl.drawArrays(gl.POINTS, 0, N);
+  requestAnimationFrame(render);
+}
+
+document.getElementById('btn-webcam').addEventListener('click', function() {
+  webcamBg = !webcamBg;
+  webcamEl.style.display = webcamBg ? 'block' : 'none';
+  lmCanvas.style.display = webcamBg ? 'block' : 'none';
+  this.classList.toggle('active', webcamBg);
+});
+
+document.getElementById('btn-landmarks').addEventListener('click', function() {
+  showLandmarks = !showLandmarks;
+  this.classList.toggle('active', showLandmarks);
+  if (!webcamBg && showLandmarks) {
+    lmCanvas.style.display = 'block';
+  } else if (!webcamBg && !showLandmarks) {
+    lmCanvas.style.display = 'none';
+  }
+});
+
+async function initMediaPipe() {
+  loadMsg.textContent = 'requesting camera...';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    webcamEl.srcObject = stream;
+    dotCam.classList.add('on');
+    loadMsg.textContent = 'loading hand model...';
+  } catch(e) {
+    loadMsg.textContent = 'camera denied — running demo mode';
+    setTimeout(() => loading.style.display = 'none', 1500);
+    requestAnimationFrame(render);
+    return;
+  }
+
+  const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}` });
+  hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
+  hands.onResults(results => {
+    handsData = results.multiHandLandmarks || [];
+  });
+
+  const camera = new Camera(webcamEl, {
+    onFrame: async () => { await hands.send({ image: webcamEl }); },
+    width: 640, height: 480
+  });
+  camera.start().then(() => {
+    loadMsg.textContent = 'ready';
+    setTimeout(() => { loading.style.display = 'none'; }, 600);
+    requestAnimationFrame(render);
+  }).catch(() => {
+    loadMsg.textContent = 'camera error — demo mode';
+    setTimeout(() => { loading.style.display = 'none'; }, 1000);
+    requestAnimationFrame(render);
+  });
+}
+
+initMediaPipe();
+</script>
+</body>
+</html>
